@@ -1,0 +1,1016 @@
+---
+title: "Are movies decreasing in quality?"
+author: "By J.P. Losebrick"
+date: "05/11/2024<br><br><b>Recommendation</b>: Adjust browser zoom settings to optimise viewing experience"
+output:
+  ioslides_presentation:
+    incremental: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r lib, include=FALSE}
+
+library(readr)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(magrittr)
+```
+
+```{r load, include=FALSE}
+# (Villa, 2023)
+RottenCritics <- read_csv('rotten_tomatoes_movie_reviews.csv')
+dim(RottenCritics)
+colSums(is.na(RottenCritics))
+# (Villa, 2023)
+RottenMovies <- read_csv('rotten_tomatoes_movies.csv')
+dim(RottenMovies)
+colSums(is.na(RottenMovies))
+# (rakkesharv, 2022)
+IMDB_Genres <- read_csv('IMDb_All_Genres_etf_clean1.csv')
+colSums(is.na(IMDB_Genres))
+```
+
+```{r preprocess, include=FALSE}
+# RottenCritics -------------------------------------------------------------------------
+# Check duplicates
+sum(duplicated(RottenCritics))  # 12394 Duplicated Reviews
+RottenCritics <- RottenCritics[!duplicated(RottenCritics), ]
+# Check datatypes
+str(RottenCritics)
+# Quantify originalScore
+RottenCritics <- mutate(RottenCritics, ScaledScore = NA)
+# Get all review scores with numerator and denominator (e.g. 7/10) (Dickison, 2009)
+DivisionScore <- str_match(RottenCritics$originalScore, "(\\d+(\\.\\d+)?)/(\\d+)")
+DivisionScore <- as.data.frame(DivisionScore)
+colnames(DivisionScore) <- c("OriginalScore", "Numerator", "Decimal", "Denominator")
+DivisionScore <- mutate(DivisionScore, ScaledScores = as.double(Numerator) * 100 / as.double(Denominator))
+
+length(which(str_detect(RottenCritics$originalScore, "^[0-9]+$") == TRUE))
+# (Kusourova, 2022)
+grep("^[0-9]+$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE)
+# Letter grades (e.g. A+)
+grep("^[A-Za-z](+|-)?$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE)
+unique(grep("^[A-Za-z](+|-)?$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE))
+
+grep("^[0-9]+.+\\D+$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE)
+
+# e.g. 3/5 stars
+grep("^(\\d+(\\.\\d+)?)/(\\d+)\\sstars$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE)
+StarDivisionScore <- str_match(RottenCritics$originalScore, "^(\\d+(\\.\\d+)?)/(\\d+)\\sstars$")
+StarDivisionScore <- as.data.frame(StarDivisionScore)
+colnames(StarDivisionScore) <- c("OriginalScore", "Numerator", "Decimal", "Denominator")
+StarDivisionScore <- mutate(StarDivisionScore, ScaledScores = as.double(Numerator) * 100 / as.double(Denominator))
+# e.g. 3 1/2 stars
+grep("^((\\d+)\\s(\\d+/\\d+))\\sstars$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE)
+StarSpaceScore <- str_match(RottenCritics$originalScore, "^((\\d+)\\s(\\d+/\\d+))\\sstars$")
+StarSpaceScore <- as.data.frame(StarSpaceScore)
+colnames(StarSpaceScore) <- c("OriginalScore", "Numeric", "Integer", "Decimal")
+StarSpaceScore <- mutate(StarSpaceScore, ScaledScores = (as.double(Integer) + 0.5) * 20)
+# e.g. 4 stars
+grep("^(\\d+)\\sstars?$", RottenCritics$originalScore, ignore.case = TRUE, value = TRUE)
+StarIntScore <- str_match(RottenCritics$originalScore, "^(\\d+)\\sstars?$")
+StarIntScore <- as.data.frame(StarIntScore)
+colnames(StarIntScore) <- c("OriginalScore", "Integer")
+StarIntScore <- mutate(StarIntScore, ScaledScores = as.double(Integer) * 20)
+# Create column for refactored ratings
+RottenCritics <- mutate(RottenCritics, ScaledScore = NA)
+
+# Apply refactored scores to RottenCritics dataframe
+DivisionList <- which(!is.na(DivisionScore$ScaledScores))
+RottenCritics$ScaledScore[DivisionList] <- DivisionScore$ScaledScores[DivisionList]
+
+StarDivisionList <- which(!is.na(StarDivisionScore$ScaledScores))
+RottenCritics$ScaledScore[StarDivisionList] <- StarDivisionScore$ScaledScores[StarDivisionList]
+
+StarSpaceList <- which(!is.na(StarSpaceScore$ScaledScores))
+RottenCritics$ScaledScore[StarSpaceList] <- StarSpaceScore$ScaledScores[StarSpaceList]
+
+StarIntList <- which(!is.na(StarIntScore$ScaledScores))
+RottenCritics$ScaledScore[StarIntList] <- StarIntScore$ScaledScores[StarIntList]
+
+# Factorise reviewState
+unique(RottenCritics$reviewState) # Fresh & Rotten
+RottenCritics$reviewState <- factor(RottenCritics$reviewState, levels = c('rotten', 'fresh'), ordered = TRUE)
+# Convert scoreSentiment to factor
+unique(RottenCritics$scoreSentiment)
+RottenCritics$scoreSentiment <- factor(RottenCritics$scoreSentiment, levels = c('NEGATIVE', 'POSITIVE'), ordered = TRUE)
+
+# RottenMovies -------------------------------------------------------------------------
+# Check duplicates
+sum(duplicated(RottenMovies))  # 12394 Duplicated Movies
+RottenMovies <- RottenMovies[!duplicated(RottenMovies), ]
+# Check datatypes
+str(RottenMovies)
+# Missing values
+colSums(is.na(RottenMovies))
+# Get original release dates, place into separate column OriginalRelease
+TheatreFirst <- which(RottenMovies$releaseDateTheaters < RottenMovies$releaseDateStreaming)
+TheatreOnly <- which(!is.na(RottenMovies$releaseDateTheaters) & is.na(RottenMovies$releaseDateStreaming))
+StreamingFirst <- which(RottenMovies$releaseDateTheaters > RottenMovies$releaseDateStreaming)
+StreamingOnly <- which(is.na(RottenMovies$releaseDateTheaters) & !is.na(RottenMovies$releaseDateStreaming))
+
+RottenMovies <- mutate(RottenMovies, OriginalRelease = NA)
+RottenMovies$OriginalRelease <- as.Date(RottenMovies$OriginalRelease)
+
+RottenMovies$OriginalRelease[TheatreFirst] <- RottenMovies$releaseDateTheaters[TheatreFirst]
+RottenMovies$OriginalRelease[TheatreOnly] <- RottenMovies$releaseDateTheaters[TheatreOnly]
+RottenMovies$OriginalRelease[StreamingFirst] <- RottenMovies$releaseDateStreaming[StreamingFirst]
+RottenMovies$OriginalRelease[StreamingOnly] <- RottenMovies$releaseDateStreaming[StreamingOnly]
+# Convert to date format
+dates <- as.Date(RottenMovies$OriginalRelease, format = '%Y-%m-%d')
+RottenMovies$OriginalRelease <- format(dates, '%d/%m/%Y')
+RottenMovies$OriginalRelease <- as.Date(RottenMovies$OriginalRelease, 
+                                        format = '%d/%m/%Y')
+
+# Convert boxoffice column to numeric, and place in separate column NumericBO
+grep("^\\$\\d+$", RottenMovies$boxOffice, ignore.case = TRUE, value = TRUE)
+Dollars <- str_match(RottenMovies$boxOffice, "^\\$(\\d+)$")
+Dollars <- as.data.frame(Dollars)
+colnames(Dollars) <- c("Original", "Numeric")
+Dollars <- mutate(Dollars, ScaledNumeric = as.double(Numeric))
+
+KDollars <- str_match(RottenMovies$boxOffice, "^\\$(\\d+\\.\\d+)K$")
+KDollars <- as.data.frame(KDollars)
+colnames(KDollars) <- c("Original", "Numeric")
+KDollars <- mutate(KDollars, ScaledNumeric = as.double(Numeric)*1000)
+
+MDollars <- str_match(RottenMovies$boxOffice, "^\\$(\\d+\\.\\d+)M$")
+MDollars <- as.data.frame(MDollars)
+colnames(MDollars) <- c("Original", "Numeric")
+MDollars <- mutate(MDollars, ScaledNumeric = as.double(Numeric)*1000000)
+# No billion dollar movie openings
+# Create and update NumericBO
+RottenMovies <- mutate(RottenMovies, NumericBO = NA)
+
+DollarList <- which(!is.na(Dollars$ScaledNumeric))
+RottenMovies$NumericBO[DollarList] <- Dollars$ScaledNumeric[DollarList]
+
+KDollarList <- which(!is.na(KDollars$ScaledNumeric))
+RottenMovies$NumericBO[KDollarList] <- KDollars$ScaledNumeric[KDollarList]
+
+MDollarList <- which(!is.na(MDollars$ScaledNumeric))
+RottenMovies$NumericBO[MDollarList] <- MDollars$ScaledNumeric[MDollarList]
+
+# Check all unique genres for each film
+# (Reddy, 2020)
+table(trimws(unlist(strsplit(RottenMovies$genre, split = ", "))))
+
+unique(unlist(strsplit(RottenMovies$genre, split = ", ")))
+
+# Get score polarities
+RottenMovies <- mutate(RottenMovies, Polarisation = abs(audienceScore - tomatoMeter))
+RottenMovies <- mutate(RottenMovies, Polarisation2 = audienceScore - tomatoMeter)
+
+# IMDB_Genres---------------------------------------------------------------------------
+# Check duplicates
+sum(duplicated(IMDB_Genres))  # 8
+IMDB_Genres <- IMDB_Genres[!duplicated(IMDB_Genres), ]
+# Check datatypes
+str(IMDB_Genres)
+
+# Get numeric version of Total_Gross column as NumericGross
+# Only features movie grosses in units of millions (M), 
+grep("^\\$(\\d+\\.\\d+)M$", IMDB_Genres$Total_Gross, ignore.case = TRUE, value = TRUE)
+Millions <- str_match(IMDB_Genres$Total_Gross, "^\\$(\\d+\\.\\d+)M$")
+Millions <- as.data.frame(Millions)
+colnames(Millions) <- c("Original", "Numeric")
+Millions <- mutate(Millions, ScaledNumeric = as.double(Numeric)*1000000)
+
+grep("Gross Unkown", IMDB_Genres$Total_Gross, ignore.case = TRUE, value = TRUE)
+# Create and update NumericGross column
+IMDB_Genres <- mutate(IMDB_Genres, NumericGross = NA)
+
+MillionList <- which(!is.na(Millions$ScaledNumeric))
+IMDB_Genres$NumericGross[MillionList] <- Millions$ScaledNumeric[MillionList]
+
+# Merge all genres of each movie into one column
+IMDB_Genres <- unite(IMDB_Genres, "all_genres", main_genre:side_genre, remove = FALSE, sep = ",  ")
+# Get all unique genres
+table(trimws(unlist(strsplit(IMDB_Genres$all_genres, split = ", "))))
+
+# Fix director entries with multiple directors ( they start with 'Directors:')
+grep("^(Directors:)(.+)", IMDB_Genres$Director, ignore.case = TRUE, value = TRUE)
+DirectorIndices <- grep("^(Directors:)(.+)", IMDB_Genres$Director, ignore.case = TRUE)
+Multidirectors <- str_match(IMDB_Genres$Director, "^(Directors:)(.+)")
+Multidirectors <- as.data.frame(Multidirectors)
+colnames(Multidirectors) <- c("Original", "Remove", "Keep")
+
+IMDB_Genres$Director[DirectorIndices] <- Multidirectors$Keep[DirectorIndices]
+
+# Remove unnecessary data frames to save memory
+rm(DivisionScore)
+rm(StarDivisionScore)
+rm(StarIntScore)
+rm(StarSpaceScore)
+rm(Dollars)
+rm(KDollars)
+rm(MDollars)
+rm(Millions)
+rm(Years)
+
+# Visualisation 1 Prep
+IMDB_Genres_80s <- IMDB_Genres %>%
+  filter(Year >= 1980 & NumericGross >= 80000000)
+
+IMDB_Genres_80s_Action <- IMDB_Genres_80s[grep("Action", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Adventure <- 
+  IMDB_Genres_80s[grep("Adventure", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Animation <- 
+  IMDB_Genres_80s[grep("Animation", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Biography <- 
+  IMDB_Genres_80s[grep("Biography", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Comedy <- IMDB_Genres_80s[grep("Comedy", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Crime <- IMDB_Genres_80s[grep("Crime", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Drama <- IMDB_Genres_80s[grep("Drama", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Fantasy <- IMDB_Genres_80s[grep("Fantasy", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Horror <- IMDB_Genres_80s[grep("Horror", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Mystery <- IMDB_Genres_80s[grep("Mystery", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Family <- IMDB_Genres_80s[grep("Family", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Romance <- IMDB_Genres_80s[grep("Romance", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_SciFi <- IMDB_Genres_80s[grep("Sci-Fi", IMDB_Genres_80s$all_genres), ]
+IMDB_Genres_80s_Thriller <- IMDB_Genres_80s[grep("Thriller", IMDB_Genres_80s$all_genres), ]
+
+# Visualisation 2 Prep
+RottenTomatoes <- RottenMovies %>% filter(!is.na(audienceScore) & 
+                                          !is.na(tomatoMeter) &
+                                          NumericBO >= 80000000 &
+                                          year(OriginalRelease) >= 1980)
+FilmPerceptionGG <- 
+  data.frame(Year = integer(), Genre = character(),
+             IMDB = double(), RTC = double(), RTA = double())
+#FilmPerception$Year <- as.integer(FilmPerception$Year)
+
+Genres <- c("Action", "Adventure", "Animation", "Biography", "Comedy", "Crime", "Drama", 
+            "Fantasy", "Horror", "Mystery", "Family", "Romance", "Sci-Fi", "Thriller")
+for (SelectYear in c(1980:2021)) {
+  # All movies
+  IMDB <- IMDB_Genres_80s$Rating[which(IMDB_Genres_80s$Year == SelectYear)] %>% mean(na.rm = TRUE)
+  RTC <- RottenTomatoes$tomatoMeter[which(year(RottenTomatoes$OriginalRelease) == SelectYear)] %>% mean(na.rm = TRUE)/10
+  RTA <- RottenTomatoes$audienceScore[which(year(RottenTomatoes$OriginalRelease) == SelectYear)] %>% mean(na.rm = TRUE)/10
+  FilmPerceptionGG[nrow(FilmPerceptionGG) + 1, ] <- c(SelectYear, "All", IMDB, RTC, RTA)
+  # All genres
+  for (Genre in Genres) {
+    IMDB_Narrow <- IMDB_Genres_80s[grep(Genre, IMDB_Genres_80s$all_genres, ignore.case = TRUE), ]
+    IMDB <- IMDB_Narrow$Rating[which(IMDB_Narrow$Year == SelectYear)] %>% mean(na.rm = TRUE)
+    
+    RT_Narrow <- RottenTomatoes[grep(Genre, RottenTomatoes$genre, ignore.case = TRUE), ]
+    RTC <- RT_Narrow$tomatoMeter[which(year(RT_Narrow$OriginalRelease) == SelectYear)] %>% mean(na.rm = TRUE)/10
+    RTA <- RT_Narrow$audienceScore[which(year(RT_Narrow$OriginalRelease) == SelectYear)] %>% mean(na.rm = TRUE)/10
+    
+    FilmPerceptionGG[nrow(FilmPerceptionGG) + 1, ] <- c(SelectYear, Genre, IMDB, RTC, RTA)
+  }
+}
+
+FilmPerceptionGG$Year <- as.integer(FilmPerceptionGG$Year)
+FilmPerceptionGG$IMDB <- as.double(FilmPerceptionGG$IMDB)
+FilmPerceptionGG$RTC <- as.double(FilmPerceptionGG$RTC)
+FilmPerceptionGG$RTA <- as.double(FilmPerceptionGG$RTA)
+FilmPerceptionGG$Genre <- factor(FilmPerceptionGG$Genre,
+                                 levels = c("All", "Action", "Adventure", "Animation", 
+                                            "Biography", "Comedy", "Crime", "Drama", 
+                                            "Fantasy", "Horror", "Mystery", "Family", 
+                                            "Romance", "Sci-Fi", "Thriller"),
+                                 ordered = TRUE)
+
+FilmPerceptionUlt <- pivot_longer(FilmPerceptionGG, cols = IMDB:RTA, names_to = "Site", values_to = "Rating")
+
+# Visualisation 4 Prep
+RottenTomatoes %<>% mutate(Year = year(OriginalRelease))
+Blockbusters <- inner_join(IMDB_Genres_80s, RottenTomatoes, by = join_by(Movie_Title == title, Year == Year))
+Blockbusters <- Blockbusters[!duplicated(Blockbusters[, 1:2]), ]
+Blockbusters %<>% mutate(Quality = round(Rating - audienceScore/10, 2))
+```
+
+## The Issue at Hand
+
+- Many people these days believe movies aren't as good as they used to be.
+- Films have become more polarised than ever, with critics and audiences often at odds with each other.
+- But just how true are these statements? We shall investigate using IMDB and Rotten Tomatoes.
+- IMDB rates movies based on their quality from a scale of 1 to 10.
+- Rotten Tomatoes rates movies based on the proportion of viewers that liked the movie,
+irrespective of how much or how little they did.
+- We will begin by directly observing the progression of movie ratings through time.
+
+## IMDB Ratings of Blockbuster Films from 1980 to 2021
+
+```{r IMDB_Ratings, echo = FALSE, warning = FALSE}
+# The following references were introduced for this section:
+# ("Marker Styling in R", n.d.)
+# (Agnihotri, 2017)
+# ("Buttons in R", n.d.)
+# ("Dropdown Events in R", n.d.)
+# ("Line Plots in R", n.d.)
+# ("Axes in R", n.d.)
+# (R Charts, n.d.)
+# (potockan, 2018)
+# (Jacques, 2017)
+
+# Dropdown Menu
+updatemenus <- list(
+  list(
+    active = 0,
+    x = -0.125,
+    buttons = list(
+      list(
+        label = "All",
+        method = "update",
+        args = list(list(visible = c(TRUE, TRUE, TRUE, 
+                                     TRUE, TRUE, TRUE,
+                                     TRUE, TRUE, TRUE, 
+                                     TRUE, TRUE, TRUE,
+                                     TRUE, TRUE, TRUE,
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Action",
+        method = "update",
+        args = list(list(visible = c(TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Adventure",
+        method = "update",
+        args = list(list(visible = c("legendonly", TRUE, "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Animation",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", TRUE, 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", TRUE,
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Biography",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),      
+      list(
+        label = "Comedy",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Crime",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", TRUE,
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", TRUE,
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Drama",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Family",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Fantasy",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", TRUE, 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", TRUE,
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Horror",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Mystery",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Romance",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", TRUE,
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", TRUE,
+                                     "legendonly", "legendonly")))),
+      list(
+        label = "Sci-Fi",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     TRUE, "legendonly")))),
+      list(
+        label = "Thriller",
+        method = "update",
+        args = list(list(visible = c("legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly", 
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE, "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", "legendonly", "legendonly",
+                                     "legendonly", TRUE))))
+    )
+  )
+)
+
+# Data Source Caption
+Source = paste0("<b>Data Source</b>: ", 
+                "rakkesharv. (2022). IMDb 5000+ Movies & ", 
+                "Multiple Genres Dataset [Dataset]. Kaggle. ",
+                "https://www.kaggle.com/datasets/rakkesharv/", 
+                "imdb-5000-movies-multiple-genres-dataset")
+
+# Create Interactive Plot
+plot_ly(x = ~Year, y = ~Rating, alpha = 0.5) %>%
+  add_trace(data = IMDB_Genres_80s_Action, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>:", IMDB_Genres_80s_Action$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Action$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Action$Director,
+                         "<br><b>Genres</b>:", IMDB_Genres_80s_Action$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Action$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Action$Total_Gross),
+            marker = list(color = 'red', line = list(color = "white", width = 1)), 
+            name = "Action", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Adventure, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Adventure$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Adventure$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Adventure$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Adventure$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Adventure$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Adventure$Total_Gross),
+            marker = list(color = 'springgreen', line = list(color = "white", width = 1)), 
+            name = "Adventure", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Animation, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Animation$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Animation$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Animation$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Animation$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Animation$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Animation$Total_Gross),
+            name = "Animation", visible = TRUE,
+            marker = list(color = 'deepskyblue', line = list(color = "white", width = 1))) %>%
+  add_trace(data = IMDB_Genres_80s_Biography, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Biography$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Biography$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Biography$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Biography$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Biography$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Biography$Total_Gross),
+            marker = list(color = 'magenta', line = list(color = "white", width = 1)), 
+            name = "Biography", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Comedy, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Comedy$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Comedy$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Comedy$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Comedy$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Comedy$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Comedy$Total_Gross),
+            marker = list(color = 'orange', line = list(color = "white", width = 1)),
+            name = "Comedy", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Crime, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Crime$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Crime$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Crime$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Crime$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Crime$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Crime$Total_Gross),
+            marker = list(color = 'dimgray', line = list(color = "white", width = 1)), 
+            name = "Crime", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Drama, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Drama$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Drama$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Drama$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Drama$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Drama$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Drama$Total_Gross),
+            marker = list(color = 'sienna', line = list(color = "white", width = 1)), 
+            name = "Drama", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Family, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Family$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Family$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Family$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Family$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Family$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Family$Total_Gross),
+            marker = list(color = 'gold', line = list(color = "white", width = 1)), 
+            name = "Family", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Fantasy, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Fantasy$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Fantasy$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Fantasy$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Fantasy$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Fantasy$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Fantasy$Total_Gross),
+            marker = list(color = 'seagreen', line = list(color = "white", width = 1)), 
+            name = "Fantasy", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Horror, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Horror$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Horror$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Horror$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Horror$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Horror$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Horror$Total_Gross),
+            marker = list(color = 'black', line = list(color = "white", width = 1)), 
+            name = "Horror", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Mystery, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text", visible = TRUE,
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Mystery$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Mystery$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Mystery$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Mystery$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Mystery$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Mystery$Total_Gross),
+            marker = list(color = 'purple', line = list(color = "white", width = 1)), 
+            name = "Mystery", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Romance, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Romance$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Romance$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Romance$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Romance$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Romance$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Romance$Total_Gross),
+            marker = list(color = 'palevioletred', line = list(color = "white", width = 1)), 
+            name = "Romance", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_SciFi, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_SciFi$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_SciFi$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_SciFi$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_SciFi$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_SciFi$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_SciFi$Total_Gross),
+            marker = list(color = 'cyan', line = list(color = "white", width = 1)), 
+            name = "SciFi", visible = TRUE) %>%
+  add_trace(data = IMDB_Genres_80s_Thriller, 
+            type = "scatter", mode = "markers", size = ~NumericGross,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", IMDB_Genres_80s_Thriller$Movie_Title,
+                         "<br><b>Year</b>: ", IMDB_Genres_80s_Thriller$Year,
+                         "<br><b>Director</b>: ", IMDB_Genres_80s_Thriller$Director,
+                         "<br><b>Genres</b>: ", IMDB_Genres_80s_Thriller$all_genres,
+                         "<br><b>IMDB Rating</b>: ", IMDB_Genres_80s_Thriller$Rating,
+                         "<br><b>Opening Box Office</b>: ", IMDB_Genres_80s_Thriller$Total_Gross),
+            marker = list(color = 'navy', line = list(color = "white", width = 1)), 
+            name = "Thriller", visible = TRUE) %>%
+  add_lines(data = IMDB_Genres_80s, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s$Rating ~ IMDB_Genres_80s$Year)),
+            name = "Overall", line = list(color = 'black', dash = 'dot'), visible = TRUE) %>%
+  add_lines(data = IMDB_Genres_80s_Action, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Action$Rating ~ IMDB_Genres_80s_Action$Year)),
+            name = "Action", line = list(color = 'red'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Adventure, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Adventure$Rating ~
+                            IMDB_Genres_80s_Adventure$Year)),
+            name = "Adventure", line = list(color = 'springgreen'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Animation, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Animation$Rating ~
+                            IMDB_Genres_80s_Animation$Year)),
+            name = "Animation", line = list(color = 'deepskyblue'), visible = "legendonly") %>%
+    add_lines(data = IMDB_Genres_80s_Biography, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Biography$Rating ~
+                            IMDB_Genres_80s_Biography$Year)),
+            name = "Biography", line = list(color = 'magenta'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Comedy, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Comedy$Rating ~ IMDB_Genres_80s_Comedy$Year)),
+            name = "Comedy", line = list(color = 'orange'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Crime, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Crime$Rating ~ IMDB_Genres_80s_Crime$Year)),
+            name = "Crime", line = list(color = 'dimgray'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Drama, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Drama$Rating ~ IMDB_Genres_80s_Drama$Year)),
+            name = "Drama", line = list(color = 'sienna'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Family, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Family$Rating ~ IMDB_Genres_80s_Family$Year)),
+            name = "Family", line = list(color = 'gold'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Fantasy, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Fantasy$Rating ~ IMDB_Genres_80s_Fantasy$Year)),
+            name = "Fantasy", line = list(color = 'seagreen'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Horror, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Horror$Rating ~ IMDB_Genres_80s_Horror$Year)),
+            name = "Horror", line = list(color = 'black'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Mystery, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Mystery$Rating ~ IMDB_Genres_80s_Mystery$Year)),
+            name = "Mystery", line = list(color = 'purple'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Romance, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Romance$Rating ~ IMDB_Genres_80s_Romance$Year)),
+            name = "Romance", line = list(color = 'palevioletred'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_SciFi, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_SciFi$Rating ~ IMDB_Genres_80s_SciFi$Year)),
+            name = "Sci-Fi", line = list(color = 'cyan'), visible = "legendonly") %>%
+  add_lines(data = IMDB_Genres_80s_Thriller, x = ~Year, 
+            y = fitted(loess(IMDB_Genres_80s_Thriller$Rating ~ IMDB_Genres_80s_Thriller$Year)),
+            name = "Thriller", line = list(color = 'navy'), visible = "legendonly") %>%
+  layout(xaxis = list(zeroline = FALSE, title = "<b>Year of Release<b>",
+                      range = list(1979,2023)),
+         yaxis = list(zeroline = FALSE, title = "<b>IMDB Rating<b>",
+                      range = list(3.8, 9.2)),
+         title = "<b>Tip</b>: Try hovering your mouse over the graph, and clicking the left and right buttons",
+         margin = list(b = 100),
+         annotations = list(
+           list(text = "<b>Note</b>: Size of data point indicates the revenue earned by the movie in its opening period", 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.2, y = -0.23,
+                font = list(size = 7, colour = 'dimgray')),
+           list(text = "<b>Note</b>: Data only includes films that opened with above $80M USD in the box office", 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.2, y = -0.26,
+                font = list(size = 7, colour = 'dimgray')),
+           list(text = Source, 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xhift = 0, yshift = 0, x = -0.2, y = -0.29,
+                font = list(size = 7, colour = 'dimgray'))),
+         updatemenus=updatemenus) %>%
+  config(displayModeBar = F)
+
+```
+
+## IMDB vs Rotten Tomatoes: Review Trends
+
+```{r AllRatings, echo = FALSE, warning = FALSE, message = FALSE}
+# The following references were introduced for this section:
+# (Bobbitt, 2020a)
+# (Bobbitt, 2021a)
+# (Bobbitt, 2021b)
+# (Display name, 2020)
+
+# Data Source Caption
+Source2 = paste0("*Note: Rotten Tomatoes groups Thriller and Mystery as one category\n",
+                 "*Note: These trends do not factor growth in the userbase of review websites\n\n",
+                 "Data Sources:\n", 
+                 "rakkesharv. (2022). IMDb 5000+ Movies & Multiple Genres Dataset [Dataset]. Kaggle. \n",
+                 "       https://www.kaggle.com/datasets/rakkesharv/imdb-5000-movies-multiple-genres-dataset\n", 
+                 "Villa, A. [andrezaza]. (2023). Massive Rotten Tomatoes Movies & Reviews [Dataset]. Kaggle. \n",
+                 "       https://www.kaggle.com/datasets/andrezaza/clapper-massive-rotten-tomatoes-movies-and-reviews?select=rotten_tomatoes_movies.csv")
+# Create Static Plot
+ggplot(data = FilmPerceptionUlt, 
+       mapping = aes(x = Year, y = Rating, colour = Site)) +
+  geom_line(linewidth = 0.5,
+            linetype = 1,
+            stat = 'smooth') +
+  scale_y_continuous(limits = c(4.0, 10.0)) +
+  facet_wrap(vars(Genre)) +
+  scale_colour_manual(values = c(IMDB = 'gold3', RTC = 'firebrick', RTA = 'darkgreen'),
+                    labels = c(IMDB = "IMDB", RTC = "Rotten Tomatoes\n(Critics)",
+                               RTA = "Rotten Tomatoes\n(Audience)"),
+                    name = "") +
+  theme(legend.position = c(0.87, 0.1),
+        legend.background = element_blank(),
+        plot.caption = element_text(size = 6, hjust = 0),
+        rect = element_rect(fill = "transparent"),
+        axis.text.x = element_text(size = 7)) +
+  labs(title = "A facetted visualisation of the average ratings of blockbusters from 1980 to 2021",
+       x = "Year", y = "Average Rating",
+       caption = Source2)
+```
+<br><br><br>
+##
+
+##  What We Have Learned So Far
+
+- Contrary to popular belief, the 2000's may have been the lowest-rated era for films. 
+Most genres dipped in ratings in that time, but are increasing in the more recent years.
+- The industry has grown substantially, and more successful blockbusters are being 
+released each year. Huge releases have become more frequent.
+- Both audiences and critics have grown more likely to carry positive reception towards films 
+over the past decade.
+- Critics have historically been harsher than audiences. This is not a new phenomenon 
+despite popular belief.
+- Despite all these positive attributes, people still believe the industry is declining. 
+Why?
+- The answer lies in the correlation between these ratings...
+
+## The Progress of Conflict between Rotten Tomatoes Metrics
+
+```{r RottenTomatoes, echo = FALSE, warning = FALSE}
+# The following references were introduced for this section:
+# (Haaff, 2019)
+# ("Legends in R", n.d.)
+
+# Data Source Caption
+Source3 = paste0("<b>Data Source</b>: ", 
+                 "Villa, A. [andrezaza]. (2023). Massive Rotten Tomatoes ", 
+                 "Movies & Reviews [Dataset]. Kaggle. ",
+                 "https://www.kaggle.com/datasets/andrezaza/", 
+                 "clapper-massive-rotten-tomatoes-movies-", 
+                 "and-reviews?select=rotten_tomatoes_movies.csv")
+# Create Interactive Visualisation
+plot_ly(data = RottenTomatoes, x = ~OriginalRelease, y = ~Polarisation) %>%
+  add_trace(type = "scatter", mode = "markers", size = ~NumericBO,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", RottenTomatoes$title,
+                         "<br><b>Date of Release</b>: ", format(RottenTomatoes$OriginalRelease, "%d/%m/%Y"),
+                         "<br><b>Genres</b>: ", RottenTomatoes$genre,
+                         "<br><b>Distributor</b>: ", RottenTomatoes$distributor,
+                         "<br><b>Opening Box Office</b>: ", RottenTomatoes$boxOffice,
+                         "<br><b>Critic Score</b>: ", RottenTomatoes$tomatoMeter,
+                         "<br><b>Audience Score</b>: ", 
+                         RottenTomatoes$audienceScore,
+                         "<br><b>Critic vs Audience Polarisation</b>: ", RottenTomatoes$Polarisation),
+            marker = list(color = ~tomatoMeter, colorscale = "Hot",
+                          colorbar = list(title = '<b>Critic\nRating', len = 1.2, y = 0.6),
+                          line = list(color = "black", width = 1))) %>%
+  add_lines(data = RottenTomatoes, x = ~year(OriginalRelease), 
+            y = fitted(loess(RottenTomatoes$Polarisation ~ year(RottenTomatoes$OriginalRelease))),
+            line = list(color = 'black')) %>%
+  layout(xaxis = list(zeroline = FALSE, title = "<b>Year of Release</b>"),
+         yaxis = list(zeroline = FALSE, title = "<b>Critic vs Audience Polarisation</b>"),
+         title = "<b>Tip</b>: Try hovering your mouse over the graph",
+         annotations = list(
+           list(text = "<b>Note</b>: Polarisation is calculated as the absolute difference between the critic and audience rating of a film on Rotten Tomatoes", 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.25,
+                font = list(size = 7, colour = 'dimgray')),
+           list(text = "<b>Note</b>: The size of each data point indicates the revenue earned by the movie in its opening period", 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.28,
+                font = list(size = 7, colour = 'dimgray')),
+           list(text = Source3, 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xhift = 0, yshift = 0, x = -0.05, y = -0.31,
+                font = list(size = 6, colour = 'dimgray'))),
+         margin = list(r = 120, b = 100),
+         plot_bgcolor  = "transparent",
+         paper_bgcolor = "transparent",
+         showlegend = FALSE) %>%
+  config(displayModeBar = F)
+
+```
+
+## The Progress of Conflict between IMDB and Rotten Tomatoes
+
+```{r IMDBvsAudience, echo = FALSE, warning = FALSE}
+# The following references were introduced for this section:
+# ("Horizontal and Vertical Lines and Rectangles in R", n.d.)
+
+# Data Source Caption
+Source40 = "<b>Data Sources</b>"
+
+Source41 = "rakkesharv. (2022). IMDb 5000+ Movies & Multiple Genres Dataset [Dataset]. Kaggle. https://www.kaggle.com/datasets/rakkesharv/imdb-5000-movies-multiple-genres-dataset"
+
+Source42 = "Villa, A. [andrezaza]. (2023). Massive Rotten Tomatoes Movies & Reviews [Dataset]. Kaggle. https://www.kaggle.com/datasets/andrezaza/clapper-massive-rotten-tomatoes-movies-and-reviews?select=rotten_tomatoes_movies.csv"
+
+# Create Interactive Visualisation
+plot_ly(x = ~OriginalRelease, y = ~Quality) %>%
+  add_trace(data = Blockbusters, type = "scatter", mode = "markers", size = ~NumericBO,
+            hoverinfo = "text",
+            text = paste("<b>Movie</b>: ", Blockbusters$Movie_Title,
+                         "<br><b>Date of Release</b>: ", format(Blockbusters$OriginalRelease, "%d/%m/%Y"),
+                         "<br><b>Genres</b>: ", Blockbusters$genre,
+                         "<br><b>Distributor</b>: ", Blockbusters$distributor,
+                         "<br><b>Opening Box Office</b>: ", Blockbusters$boxOffice,
+                         "<br><b>RT Audience Score</b>: ", Blockbusters$audienceScore,
+                         "<br><b>IMDB Rating</b>: ", Blockbusters$Rating,
+                         "<br><b>RT Audience vs IMDB Polarisation</b>: ", Blockbusters$Quality),
+            marker = list(color = ~Rating, colorscale = "RdBu",
+                          colorbar = list(title = '<b>IMDB\nRating     ', dtick = 1, len = 1, y = 0.5),
+                          line = list(color = "black", width = 1))) %>%
+  add_lines(data = Blockbusters, x = ~Year, 
+            y = fitted(loess(Blockbusters$Quality ~ Blockbusters$Year)),
+            line = list(color = 'black')) %>%
+  layout(title = list(text = "<b>Note</b>: Gold region indicates IMDB ratings are greater than RT Audience ratings, green region indicates the opposite",
+                      font = list(size = 11), xanchor = "center", x = 2),
+         xaxis = list(title = "<b>Year of Release</b>", range = c("1979-01-01", "2023-01-01")),
+         yaxis = list(title = "<b>RT Audience vs IMDB Polarisation</b>"),
+         showlegend = FALSE,
+         shapes = list(list(type = "rect", fillcolor = "gold", line = list(color = "gold"), opacity = 0.05, 
+                            y0 = 0, y1 = 3, x0 = "1979-01-01", x1 = "2024-01-01"),
+                       list(type = "rect", fillcolor = "darkgreen", line = list(color = "darkgreen"), opacity = 0.05, 
+                            y0 = 0, y1 = -3, x0 = "1979-01-01", x1 = "2024-01-01")),
+         annotations = list(
+           list(text = "<b>Note</b>: Polarisation is calculated as the absolute difference between the Rotten Tomatoes audience rating and IMDB rating of a film, some films may be missing as a result", 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.26,
+                font = list(size = 7, colour = 'dimgray')),
+           list(text = "<b>Note</b>: The size of each data point indicates the revenue earned by the movie in its opening period", 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.29,
+                font = list(size = 7, colour = 'dimgray')),
+           list(text = Source40, 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.35,
+                font = list(size = 6.5, colour = 'dimgray')), 
+           list(text = Source41, 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.38,
+                font = list(size = 6.5, colour = 'dimgray')),
+           list(text = Source42, 
+                showarrow = FALSE, xref = 'paper', yref = 'paper',
+                xanchor = 'centre', yanchor = 'auto',
+                xshift = 0, yshift = 0, x = -0.05, y = -0.41,
+                font = list(size = 6.5, colour = 'dimgray'))),
+         margin = list(b = 120),
+         plot_bgcolor  = "transparent",
+         paper_bgcolor = "transparent") %>%
+  config(displayModeBar = F)
+```
+
+## Concluding Thoughts
+<font size="4">
+
+- IMDB ratings indicate movie quality has been increasing from the previous decade, but has yet to reach the heights of the 80's era.
+- Films have become more likely to be enjoyed by critics and audiences alike, and for the latter reaching the proportions of the 80's.
+- Critics have always rated films lower than audiences, but there is an undeniable growth in the schism between them. Films such as The Last Jedi, Venom, Jurassic World: Dominion, and Where the Crawdads Sing were among the most divisive blockbusters ever released in history.
+- At the end of the previous decade, quality sharply dropped as an indicator of audience enjoyment. Notable examples included Sonic the Hedgehog, The Lion King (2019), and Venom: Let There Be Carnage.
+- Overall, films have not become worse. But they generate more polarisation (not helped by social media), and there has been an increase in mediocre blockbusters that barely meet the expectations of an enjoyable experience.
+
+</font>
+
+##  References
+
+<font size="1">
+
+* Agnihotri, N. [Niranjan Agnihotri]. (2017, July 30). *How to remove warning messages in R Markdown document?* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/45399587/how-to-remove-warning-messages-in-r-markdown-document
+
+* Bärbel. (2015, March 26). *R Markdown - changing font size and font type in html output* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/29274501/r-markdown-changing-font-size-and-font-type-in-html-output
+
+* Bobbitt, Z. (2020a, August 21). How to Set Axis Limits in ggplot2 [Online]. *Statology*. https://www.statology.org/set-axis-limits-ggplot2/
+
+* Bobbitt, Z. (2020b, October 19). How to Remove Dollar Signs in R (With Examples) [Online]. *Statology*. https://www.statology.org/remove-dollar-sign-in-r/#:~:text=You%20can%20easily%20remove%20dollar%20signs%20and%20commas%20from%20data
+
+* Bobbitt, Z. (2021a, March 24). How to Change Legend Position in ggplot2 (With Examples) [Online]. *Statology*. https://www.statology.org/ggplot-legend-position/
+
+* Bobbitt, Z. (2021b, June 2). How to Rotate Axis Labels in ggplot2 (With Examples) [Online]. *Statology*. https://www.statology.org/rotate-axis-labels-ggplot2/
+
+* Bobbitt, Z. (2024, May 8). How to Check if String Contains Specific Characters in R [Online]. *Statology*. https://www.statology.org/string-contains-r/
+
+* Dickison, D. (Daniel Dickison). (2009, June 4). *Regex group capture in R with multiple capture-groups* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/952275/regex-group-capture-in-r-with-multiple-capture-groups#:~:text=In%20R,%20is%20it%20possible%20to%20extract%20group%20capture%20from
+
+* Display name. (2020, November 5). *Left align ggplot caption* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/64701500/left-align-ggplot-caption
+
+* Haaff, T. [Taylor Haaff]. (2019, April 22). *How can I change colorscale for colorbar with R-Plotly?* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/55797099/how-can-i-change-colorscale-for-colorbar-with-r-plotly
+
+* Jacques, C. [chrisjacques]. (2017, July 14). *plotly adding a source or caption to a chart* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/45103559/plotly-adding-a-source-or-caption-to-a-chart
+
+* Kusourova, E. (2022, October 14). A Guide To R Regular Expressions [Online]. *Datacamp*. https://www.datacamp.com/tutorial/regex-r-regular-expressions-guide
+
+* Plotly. (n.d.). *Axes in R* [Online]. https://plotly.com/r/axes/
+
+* Plotly. (n.d.). *Buttons in R* [Online]. https://plotly.com/r/custom-buttons/#update-button
+
+* Plotly. (n.d.). *Dropdown Events in R* [Online]. https://plotly.com/r/dropdowns/
+
+* Plotly. (n.d.). *Horizontal and Vertical Lines and Rectangles in R* [Online]. https://plotly.com/r/horizontal-vertical-shapes/
+
+* Plotly. (n.d.). *Legends in R* [Online]. https://plotly.com/r/legend/
+
+* Plotly. (n.d.). *Line Plots in R* [Online]. https://plotly.com/r/line-charts/
+
+* Plotly. (n.d.). *Marker Styling in R* [Online]. https://plotly.com/r/marker-style/
+
+</font>
+
+##  References
+
+<font size="1">
+
+* potockan. (2018, April 7). *Plotly, add border around points created with add_markers* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/49706258/plotly-add-border-around-points-created-with-add-markers
+
+* R Charts. (n.d.) *Colors in R*. https://r-charts.com/colors/
+
+* rakkesharv. (2022). *IMDb 5000+ Movies & Multiple Genres Dataset* [Dataset]. Kaggle. https://www.kaggle.com/datasets/rakkesharv/imdb-5000-movies-multiple-genres-dataset
+
+* Reddy, S. [Shravya Reddy]. (2020, April 6). *Extract the unique genres and its count and store in data frame with index key* [Online forum post]. Stack Overflow. https://stackoverflow.com/questions/61065700/extract-the-unique-genres-and-its-count-and-store-in-data-frame-with-index-key#:~:text=Apr%208,%202020%20at%208:52.%202.%20We%20can%20use%20separate_rows.
+
+* Villa, A. [andrezaza]. (2023). *Massive Rotten Tomatoes Movies & Reviews* [Dataset]. Kaggle. https://www.kaggle.com/datasets/andrezaza/clapper-massive-rotten-tomatoes-movies-and-reviews?select=rotten_tomatoes_movies.csv
+
+* Xie, Y., Allaire, J. J., & Grolemund, G. (2023, December 30). *R Markdown: The Definitive Guide* [Online textbook]. Chapman & Hall/CRC. https://bookdown.org/yihui/rmarkdown/
+
+</font>
