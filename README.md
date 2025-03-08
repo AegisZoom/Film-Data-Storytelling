@@ -49,7 +49,7 @@ The page should look like this when you first open it:
 
 ![Example](https://github.com/AegisZoom/Film-Data-Storytelling/blob/main/Presentation_Slide.PNG)
 
-⚠️ **Note**: I used the pseudonym J.P. Losebrick when I published this presentation online to protect my identity. This pseudonym was formed by taking my initials P.L., adding the J from my surname, reordering the initials to J.P.L., and having L stand for Losebrick which was the most historic fail at pronouncing my surname.
+⚠️ **Note**: I used the pseudonym J.P. Losebrick when I published this presentation online to protect my identity.
 
 ## Files and Specifications
 
