@@ -15,6 +15,8 @@ A total of three datasets were used, and they are referenced below. The second r
 - rakkesharv. (2022). *IMDb 5000+ Movies & Multiple Genres Dataset* [Dataset]. Kaggle. https://www.kaggle.com/datasets/rakkesharv/imdb-5000-movies-multiple-genres-dataset
 - Villa, A. [andrezaza]. (2023). *Massive Rotten Tomatoes Movies & Reviews* [Dataset]. Kaggle. https://www.kaggle.com/datasets/andrezaza/clapper-massive-rotten-tomatoes-movies-and-reviews?select=rotten_tomatoes_movies.csv
 
+*These datasets were shared without modification, and applied under the **Creative Commons CC0 1.0 Universal License (Public Domain)**, which can be accessed in the following link: https://creativecommons.org/publicdomain/zero/1.0/*
+
 ## Skills Used
 
 - 💾 **Programming**:
